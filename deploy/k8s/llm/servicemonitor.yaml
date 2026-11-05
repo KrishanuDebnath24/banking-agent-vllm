@@ -1,0 +1,19 @@
+# Tells Prometheus to read vLLM's /metrics on every vLLM pod. KEDA scales on these numbers, so
+# without them the autoscaler reads 0 and never adds a GPU.
+# The vLLM chart's own ServiceMonitor found no targets in the "llm" namespace on the first cluster
+# run (Prometheus had no vllm target at all), so this one selects the engine Service directly, by
+# its label and the container port, independent of the chart's port names.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vllm-engines
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: serving-engine   # the chart's engine Service
+  namespaceSelector:
+    matchNames: [llm]
+  endpoints:
+    - targetPort: 8000          # vLLM's port in the pod (the Service maps 80 -> 8000)
+      path: /metrics
+      interval: 15s

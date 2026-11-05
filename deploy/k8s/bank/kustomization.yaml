@@ -1,0 +1,15 @@
+# The banking app: Postgres, bank servers, web chat and agents.
+#   kubectl apply -k deploy/k8s/bank
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bank
+resources:
+  - namespace.yaml
+  - postgres.yaml
+  - mcp.yaml
+  - api.yaml
+  - networkpolicies.yaml
+images:
+  - name: bank-app
+    newName: ACCOUNT_ID.dkr.ecr.eu-west-1.amazonaws.com/banking-agent-vllm   # your account id
+    newTag: v1

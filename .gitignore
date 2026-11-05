@@ -1,0 +1,34 @@
+.env
+.venv/
+__pycache__/
+seed_log.jsonl
+sessions.db
+sessions.db-*
+service_requests.jsonl
+verification.db
+demo_accounts.json
+telemetry.db
+evals/results/
+service_requests.db
+*.db-*
+*.db
+cdk.out/
+
+# Secrets and machine-specific settings (never commit these)
+.env.*
+!.env.example
+*.pem
+*.key
+kubeconfig*
+.docker-ecr/
+
+# Tooling, logs and downloads
+*.pyc
+.pytest_cache/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+*.tgz
+*.zip

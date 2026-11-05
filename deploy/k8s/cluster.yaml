@@ -1,0 +1,27 @@
+# The EKS cluster, with EKS Auto Mode: AWS runs the nodes, including the GPU drivers and the NVIDIA
+# device plugin, node scaling (Karpenter), load balancers and EBS volumes. Nothing to install for those.
+#
+#   eksctl create cluster -f deploy/k8s/cluster.yaml      # about 15-20 minutes
+#   eksctl delete cluster -f deploy/k8s/cluster.yaml      # when you finish: the cluster costs money even idle
+#
+# If your eksctl says the version is unknown, update eksctl or use "1.36".
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: bank-vllm
+  region: eu-west-1
+  version: "1.37"
+  tags:
+    project: banking-agent-vllm
+
+autoModeConfig:
+  enabled: true            # also creates the "general-purpose" and "system" node pools for CPU work
+
+vpc:
+  nat:
+    gateway: Single        # nodes reach Hugging Face, ECR and LangSmith through one NAT gateway
+  clusterEndpoints:
+    publicAccess: true     # kubectl from your PC
+    privateAccess: true
+  # publicAccessCIDRs: ["203.0.113.7/32"]   # recommended: only your own IP can reach the API server

@@ -1,0 +1,11 @@
+# What goes next to the vLLM chart in the "llm" namespace (install the chart first).
+#   kubectl apply -k deploy/k8s/llm
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: llm
+resources:
+  - autoscaling.yaml
+  - networkpolicies.yaml
+  - alerts.yaml
+  - engines-roundrobin.yaml
+  - servicemonitor.yaml

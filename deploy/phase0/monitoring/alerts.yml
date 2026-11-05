@@ -1,0 +1,27 @@
+# The same alerts as the cluster (deploy/k8s/llm/alerts.yaml), for one machine.
+# They show in Prometheus (http://127.0.0.1:9090/alerts) and in Grafana. Nothing is emailed.
+groups:
+  - name: vllm
+    rules:
+      - alert: VLLMRequestsWaiting
+        expr: sum(vllm:num_requests_waiting) > 0
+        for: 5m
+        annotations:
+          summary: Requests have queued in vLLM for 5 minutes - at capacity; add a GPU or tune batching.
+      - alert: VLLMKVCacheNearlyFull
+        expr: max(vllm:kv_cache_usage_perc) > 0.9
+        for: 5m
+        annotations:
+          summary: KV cache above 90% for 5 minutes - requests will be preempted and slow down.
+      - alert: VLLMSlowFirstToken
+        expr: histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket[5m]))) > 1
+        for: 10m
+        annotations:
+          summary: p95 time to first token above 1 s for 10 minutes.
+      - alert: VLLMPrefixCacheHitRateLow
+        expr: >
+          (sum(rate(vllm:prefix_cache_hits_total[15m])) / sum(rate(vllm:prefix_cache_queries_total[15m]))) < 0.5
+          and sum(rate(vllm:prefix_cache_queries_total[15m])) > 0
+        for: 30m
+        annotations:
+          summary: Under half of prompt tokens come from the cache - check the prompt order.

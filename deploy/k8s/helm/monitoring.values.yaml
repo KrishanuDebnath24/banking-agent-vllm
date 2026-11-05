@@ -1,0 +1,30 @@
+# kube-prometheus-stack: Prometheus (scrapes vLLM, feeds KEDA) and Grafana (dashboards).
+#
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm upgrade --install monitoring prometheus-community/kube-prometheus-stack -n monitoring \
+#     --create-namespace -f deploy/k8s/helm/monitoring.values.yaml
+#
+# Prometheus is then at http://kps-prometheus.monitoring:9090 inside the cluster (KEDA uses it).
+# Grafana:  kubectl -n monitoring port-forward svc/monitoring-grafana 3000:80  ->  http://127.0.0.1:3000
+#           user admin, password: kubectl -n monitoring get secret monitoring-grafana -o jsonpath="{.data.admin-password}"
+#           (PowerShell: decode it with [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("<value>")))
+
+fullnameOverride: kps                  # predictable names: kps-prometheus, ...
+
+prometheus:
+  prometheusSpec:
+    serviceMonitorSelectorNilUsesHelmValues: false   # pick up the vLLM chart's ServiceMonitor
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false             # and the alert rules in deploy/k8s/llm
+    retention: 7d
+    resources:
+      requests: {cpu: 200m, memory: 1Gi}
+
+alertmanager:
+  enabled: false                       # alerts show in Prometheus and Grafana; no email or Slack set up
+
+grafana:
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: ALL             # load the vLLM dashboard from the llm namespace

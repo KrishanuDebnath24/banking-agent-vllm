@@ -1,0 +1,50 @@
+# Who may talk to whom in the "bank" namespace. Everything not listed is refused.
+# (kubectl port-forward still works: it enters the pod directly.)
+
+# Postgres: only the app and the bank servers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels: {app: postgres}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - {key: app, operator: In, values: [api, mcp]}
+      ports:
+        - port: 5432
+---
+# Bank servers: only the app (the agents call them with the customer's token).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mcp
+spec:
+  podSelector:
+    matchLabels: {app: mcp}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app: api}
+---
+# Web app: from inside this namespace and from the load-test Jobs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: api
+spec:
+  podSelector:
+    matchLabels: {app: api}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: loadtest}
+      ports:
+        - port: 8000

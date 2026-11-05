@@ -1,0 +1,50 @@
+# KEDA scales the vLLM pods on the model's own signals, not CPU:
+#   - opening hours: one pod from 08:40 to 17:05 Irish time, none outside (the GPU node then goes too)
+#   - more than 8 requests running per pod (E3: on an A10G the time to first token passes 1 s
+#     beyond ~8 at once, long before anything queues), requests waiting in vLLM's queue, or the
+#     KV cache nearly full: add pods, up to 2
+# A pod is removed only after 10 quiet minutes (keeps conversations on their cached pod, and the
+# slow cold start isn't paid twice).
+#
+# Benchmark day, outside hours or with a fixed size: pause it at N pods
+#   kubectl -n llm annotate scaledobject vllm autoscaling.keda.sh/paused-replicas="1" --overwrite
+# and resume:
+#   kubectl -n llm annotate scaledobject vllm autoscaling.keda.sh/paused-replicas-
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm
+spec:
+  scaleTargetRef:
+    name: vllm-gptoss-deployment-vllm        # made by the vllm-stack chart
+  minReplicaCount: 0
+  maxReplicaCount: 2                         # the account's GPU quota (8 vCPUs = two g5.xlarge)
+  pollingInterval: 15
+  cooldownPeriod: 600
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 600
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Europe/Dublin
+        start: "40 8 * * *"
+        end: "5 17 * * *"
+        desiredReplicas: "1"
+    - type: prometheus                       # the knee from E3: about 8 requests at once per GPU
+      metadata:
+        serverAddress: http://kps-prometheus.monitoring.svc:9090
+        query: sum(vllm:num_requests_running{namespace="llm"}) or vector(0)
+        threshold: "8"
+    - type: prometheus
+      metadata:
+        serverAddress: http://kps-prometheus.monitoring.svc:9090
+        query: sum(vllm:num_requests_waiting{namespace="llm"}) or vector(0)
+        threshold: "1"
+    - type: prometheus
+      metadata:
+        serverAddress: http://kps-prometheus.monitoring.svc:9090
+        query: avg(vllm:kv_cache_usage_perc{namespace="llm"}) or vector(0)
+        threshold: "0.85"

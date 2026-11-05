@@ -1,0 +1,31 @@
+# GPU nodes for vLLM: one NVIDIA A10G (24 GB) per node, added only while a vLLM pod needs one and
+# removed 5 minutes after the node is empty. Only pods that tolerate the taint (vLLM) land here.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu
+spec:
+  template:
+    metadata:
+      labels:
+        bank/gpu: "true"
+    spec:
+      nodeClassRef:
+        group: eks.amazonaws.com
+        kind: NodeClass
+        name: default
+      requirements:
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]          # add "spot" for cheaper benchmark days (can be taken back)
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: ["g5.xlarge"]          # 1x A10G 24 GB, 4 vCPU, 16 GiB RAM (Phase 0 measured this one)
+      taints:
+        - key: nvidia.com/gpu
+          effect: NoSchedule
+  limits:
+    nvidia.com/gpu: 2                    # never more than 2 GPUs: the account's G-instance quota is 8 vCPUs
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 5m

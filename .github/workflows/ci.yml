@@ -1,0 +1,161 @@
+# Free checks on every push: offline tests (no keys, no network, no GPU: a fake vLLM server stands
+# in for the model), the same storage and API tests on a real Postgres, a check that the Docker
+# image builds and starts, and checks on the Kubernetes manifests and Helm values.
+#
+# The eval suite calls a real model, so it costs a little and runs only when you ask:
+# Actions tab -> ci -> Run workflow. GitHub can't reach your private vLLM, so this job runs the
+# same suite on Claude, as the baseline to compare with; run it against vLLM from your PC
+# (deploy/phase0/README.md, E9). It skips with a note if the ANTHROPIC_API_KEY secret isn't set.
+#
+# Repository secrets for the eval job: ANTHROPIC_API_KEY, LANGSMITH_API_KEY.
+# Optional, to include the Bedrock guardrail: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and
+# the repository variables GUARDRAIL_ID / GUARDRAIL_VERSION.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python tests/test_categories.py
+      - run: python tests/test_guardrails.py
+      - run: python tests/test_agent_offline.py
+      - run: python tests/test_multi_agent_offline.py
+      - run: python tests/test_evals_offline.py
+      - run: python tests/test_vllm_offline.py
+      - run: python tests/test_bench_offline.py
+      - run: python tests/test_api_offline.py
+      - run: python tests/test_storage.py
+      - run: python tests/test_guest_bank.py
+
+  postgres-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: bank
+          POSTGRES_USER: bank
+          POSTGRES_PASSWORD: bank-local-only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bank -d bank"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://bank:bank-local-only@localhost:5432/bank
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python tests/test_storage.py
+      - run: python tests/test_guest_bank.py
+      - run: python tests/test_api_offline.py
+
+  docker-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose file is valid
+        run: touch .env && docker compose config --quiet
+      - run: docker build -t banking-agent:ci .
+      - name: Image starts and passes its health check
+        run: |
+          docker run -d --name api -e OBP_FAKE=1 -p 8000:8000 banking-agent:ci
+          for i in $(seq 1 30); do curl -fs http://localhost:8000/healthz && exit 0; sleep 2; done
+          docker logs api
+          exit 1
+
+  manifests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform and kustomize
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar -xz kubeconform
+          curl -fsSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" | tar -xz kustomize
+      - name: Kubernetes manifests are valid (custom resources too, against their published schemas)
+        run: |
+          ./kustomize build deploy/k8s/bank > bank.yaml
+          ./kustomize build deploy/k8s/llm > llm.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            bank.yaml llm.yaml deploy/k8s/platform/*.yaml deploy/k8s/loadtest/*.yaml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: vLLM chart values match the pinned chart's schema (vllm-stack 0.1.13)
+        run: |
+          pip install jsonschema pyyaml
+          curl -fsSL -o schema.json https://raw.githubusercontent.com/vllm-project/production-stack/vllm-stack-0.1.13/helm/values.schema.json
+          python - <<'EOF'
+          import json, sys, yaml, jsonschema
+          schema = json.load(open("schema.json"))
+          values = yaml.safe_load(open("deploy/k8s/helm/vllm-stack.values.yaml"))
+          errors = list(jsonschema.validators.validator_for(schema)(schema).iter_errors(values))
+          for e in errors:
+              print("/".join(map(str, e.path)), e.message)
+          sys.exit(1 if errors else 0)
+          EOF
+      - name: Phase 0 compose file is valid
+        run: touch .env && docker compose -f docker-compose.yml -f deploy/phase0/compose.vllm.yml config --quiet
+
+  evals:
+    needs: offline-tests
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODEL: anthropic:claude-haiku-5-5
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+      LANGSMITH_PROJECT: banking-agent-ci
+      GUARDRAIL_ID: ${{ vars.GUARDRAIL_ID }}
+      GUARDRAIL_VERSION: ${{ vars.GUARDRAIL_VERSION }}
+      GUARDRAIL_MODE: shadow
+      AWS_REGION: eu-west-1
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: No API key, so no evals
+        if: env.ANTHROPIC_API_KEY == ''
+        run: echo "::notice::Evals skipped. Add the ANTHROPIC_API_KEY and LANGSMITH_API_KEY repository secrets to run them."
+      - uses: actions/checkout@v4
+        if: env.ANTHROPIC_API_KEY != ''
+      - uses: actions/setup-python@v5
+        if: env.ANTHROPIC_API_KEY != ''
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+        if: env.ANTHROPIC_API_KEY != ''
+      - name: Eval suite (fails the build if a gate fails)
+        if: env.ANTHROPIC_API_KEY != ''
+        run: python -m evals.run --judge
+      - uses: actions/upload-artifact@v4
+        if: always() && env.ANTHROPIC_API_KEY != ''
+        with:
+          name: eval-results
+          path: evals/results/

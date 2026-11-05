@@ -1,0 +1,2 @@
+locust>=2.30        # E7: simulated customers through the web API
+guidellm>=0.3       # E3 cross-check: finds the highest sustainable request rate

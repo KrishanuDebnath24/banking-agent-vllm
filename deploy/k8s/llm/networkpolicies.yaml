@@ -1,0 +1,43 @@
+# Who may talk to the model. Everything not listed is refused.
+
+# vLLM pods: only the router, Prometheus (metrics) and the load-test Jobs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-engines
+spec:
+  podSelector:
+    matchLabels: {app: bank-llm-engine}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: router}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: loadtest}
+      ports:
+        - port: 8000
+---
+# The router: only the banking app, Prometheus and the load-test Jobs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-router
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: router}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: bank}
+          podSelector:
+            matchLabels: {app: api}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: loadtest}
+      ports:
+        - port: 8000

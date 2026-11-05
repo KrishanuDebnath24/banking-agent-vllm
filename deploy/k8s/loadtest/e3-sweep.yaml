@@ -1,0 +1,51 @@
+# E3 on the cluster: requests at once 1 -> 256 through the router, with `vllm bench serve`.
+#   kubectl apply -f deploy/k8s/loadtest/e3-sweep.yaml
+#   kubectl -n loadtest logs -f job/e3-sweep
+#   kubectl -n loadtest logs job/e3-sweep > e3-cluster.log ; python -m bench.summarise --from-log e3-cluster.log
+#   kubectl -n loadtest delete job e3-sweep           (before running it again)
+# Point BASE_URL at http://engines-roundrobin.llm.svc.cluster.local for the no-router comparison (E6).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e3-sweep
+  namespace: loadtest
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: vllm/vllm-openai:v0.32.0          # has `vllm bench serve`; runs on a CPU node
+          env:
+            - {name: BASE_URL, value: "http://vllm-router-service.llm.svc.cluster.local"}
+            - {name: MODEL, value: openai/gpt-oss-20b}
+            - {name: CONCURRENCY, value: "1 2 4 8 16 32 64 128 256"}
+            - {name: PREFIX_LEN, value: "2500"}
+            - {name: INPUT_LEN, value: "500"}
+            - {name: OUTPUT_LEN, value: "200"}
+            - {name: LABEL, value: e3-cluster}
+          command: ["bash", "-c"]
+          args:
+            - |
+              set -u
+              mkdir -p /results
+              for c in $CONCURRENCY; do
+                n=$(( c * 10 )); [ "$n" -lt 20 ] && n=20
+                echo "== ${LABEL}: ${c} at once, ${n} requests"
+                vllm bench serve --backend openai-chat --endpoint /v1/chat/completions --base-url "$BASE_URL" \
+                  --model "$MODEL" --dataset-name random \
+                  --random-prefix-len "$PREFIX_LEN" --random-input-len "$INPUT_LEN" --random-output-len "$OUTPUT_LEN" \
+                  --ignore-eos --num-prompts "$n" --max-concurrency "$c" \
+                  --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99 \
+                  --goodput ttft:1000 tpot:50 \
+                  --save-result --result-dir /results --result-filename "${LABEL}-c${c}.json" || echo "level ${c} failed"
+              done
+              # The results, one line each, so they survive in the Job's log
+              for f in /results/*.json; do
+                python3 -c 'import json,os,sys; print("RESULT_JSON", os.path.basename(sys.argv[1]), json.dumps(json.load(open(sys.argv[1]))))' "$f"
+              done
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {memory: 8Gi}

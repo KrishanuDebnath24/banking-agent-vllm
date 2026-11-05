@@ -1,0 +1,28 @@
+# Two cluster settings EKS Auto Mode doesn't make for you.
+
+# 1. Encrypted gp3 EBS volumes (Postgres keeps its data on one). Auto Mode has no StorageClass of
+#    its own; this one becomes the default.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: auto-ebs-sc
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+allowedTopologies:
+  - matchLabelExpressions:
+      - key: eks.amazonaws.com/compute-type
+        values: ["auto"]
+provisioner: ebs.csi.eks.amazonaws.com
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+  encrypted: "true"
+---
+# 2. Turn on the NetworkPolicy controller, so the policies in bank/ and llm/ are enforced.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: amazon-vpc-cni
+  namespace: kube-system
+data:
+  enable-network-policy-controller: "true"

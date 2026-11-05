@@ -1,0 +1,102 @@
+# Phase 0: the whole app plus vLLM on ONE GPU machine (an EC2 g5.xlarge: 1x NVIDIA A10G, 24 GB).
+# Added on top of the normal compose file, so Postgres, the bank servers and the web chat are the
+# same as on your PC; only the model changes.
+#
+#   docker compose -f docker-compose.yml -f deploy/phase0/compose.vllm.yml up -d --build
+#   docker compose -f docker-compose.yml -f deploy/phase0/compose.vllm.yml logs -f vllm
+#
+# Settings (in .env, all optional):
+#   VLLM_MODEL                  Hugging Face model id (default openai/gpt-oss-20b)
+#   VLLM_TOOL_PARSER            tool-call parser for that model (openai for gpt-oss; see vLLM's
+#                               "Tool Calling" page for others)
+#   VLLM_TAG                    vLLM image tag (pin one release)
+#   VLLM_PREFIX_CACHING_FLAG    --enable-prefix-caching (default) or --no-enable-prefix-caching (E2)
+#   VLLM_KV_CACHE_DTYPE         auto (default) or fp8 (E5)
+#   VLLM_MAX_NUM_SEQS / VLLM_MAX_NUM_BATCHED_TOKENS / VLLM_MAX_MODEL_LEN   batching limits (E4)
+#   HF_TOKEN                    only for gated models
+#   GRAFANA_ADMIN_PASSWORD      Grafana's admin login (default admin); viewing needs no login
+#
+# vLLM listens on 127.0.0.1:8001 of the GPU machine only; reach it from your PC through SSH.
+# So do Prometheus (127.0.0.1:9090: vLLM's metrics every 5 s, and the alerts) and Grafana
+# (127.0.0.1:3000: dashboards). Add -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 to the tunnel.
+
+services:
+  vllm:
+    image: vllm/vllm-openai:${VLLM_TAG:-v0.32.0}
+    command:
+      - ${VLLM_MODEL:-openai/gpt-oss-20b}
+      - --max-model-len=${VLLM_MAX_MODEL_LEN:-16384}
+      - --gpu-memory-utilization=0.90
+      - --kv-cache-dtype=${VLLM_KV_CACHE_DTYPE:-auto}
+      - --max-num-seqs=${VLLM_MAX_NUM_SEQS:-128}
+      - --max-num-batched-tokens=${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}
+      - ${VLLM_PREFIX_CACHING_FLAG:---enable-prefix-caching}
+      - --enable-prompt-tokens-details
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${VLLM_TOOL_PARSER:-openai}
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    ipc: host                       # vLLM's workers share memory through /dev/shm
+    volumes:
+      - hf-cache:/root/.cache/huggingface   # the model downloads once
+      - ./bench/results:/results            # benchmark results land in bench/results/ (paths are
+                                            # relative to the project folder, not to this file)
+    ports:
+      - "127.0.0.1:8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15m              # first start downloads the model and compiles
+
+  api:
+    environment:
+      MODEL: vllm:${VLLM_MODEL:-openai/gpt-oss-20b}
+      VLLM_BASE_URL: http://vllm:8000/v1
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-banking-agent-vllm}
+    depends_on:
+      vllm:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_TAG:-v3.14.0}
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/phase0/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/phase0/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus         # metrics survive restarts (15 days kept)
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_TAG:-12.4.12}
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"     # reachable only through your SSH tunnel, so viewing
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer    # needs no login; editing needs the admin login
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/bank-llm.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./deploy/phase0/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro   # data source
+      - ./deploy/phase0/monitoring/grafana/dashboards:/etc/grafana/dashboards:ro       # dashboards
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+
+volumes:
+  hf-cache:
+  prometheus-data:

@@ -1,0 +1,32 @@
+# The plan's alerts, as Prometheus rules. They show in Prometheus (Alerts tab) and Grafana.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vllm
+spec:
+  groups:
+    - name: vllm
+      rules:
+        - alert: VLLMRequestsWaiting
+          expr: sum(vllm:num_requests_waiting{namespace="llm"}) > 0
+          for: 5m
+          annotations:
+            summary: Requests have queued in vLLM for 5 minutes - at capacity; add replicas or tune batching.
+        - alert: VLLMKVCacheNearlyFull
+          expr: max(vllm:kv_cache_usage_perc{namespace="llm"}) > 0.9
+          for: 5m
+          annotations:
+            summary: KV cache above 90% for 5 minutes - requests will be preempted and slow down.
+        - alert: VLLMSlowFirstToken
+          expr: histogram_quantile(0.95, sum by (le) (rate(vllm:time_to_first_token_seconds_bucket{namespace="llm"}[5m]))) > 1
+          for: 10m
+          annotations:
+            summary: p95 time to first token above 1 s for 10 minutes.
+        - alert: VLLMPrefixCacheHitRateLow
+          expr: >
+            (sum(rate(vllm:prefix_cache_hits_total{namespace="llm"}[15m]))
+              / sum(rate(vllm:prefix_cache_queries_total{namespace="llm"}[15m]))) < 0.5
+            and sum(rate(vllm:prefix_cache_queries_total{namespace="llm"}[15m])) > 0
+          for: 30m
+          annotations:
+            summary: Under half of prompt tokens come from the cache - check session routing and prompt order.

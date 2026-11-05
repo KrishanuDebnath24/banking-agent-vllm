@@ -1,0 +1,11 @@
+# A plain Kubernetes Service over the vLLM pods, with no session routing (round robin).
+# Only for E6: compare it with the router to see what session routing saves.
+apiVersion: v1
+kind: Service
+metadata:
+  name: engines-roundrobin
+spec:
+  selector: {app: bank-llm-engine}
+  ports:
+    - port: 80
+      targetPort: 8000

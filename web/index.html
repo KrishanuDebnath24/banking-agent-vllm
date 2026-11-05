@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Bank assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Next:wght@400;600;700&display=swap">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-start">
+      <button class="menu-button" id="menu-button" type="button" aria-label="Your conversations"
+              aria-controls="convo-panel" aria-expanded="false" hidden>
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="brand" href="./" aria-label="Demo Bank assistant, start page">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Demo Bank</span>
+        <span class="brand-sub">assistant</span>
+      </a>
+    </div>
+    <div class="who" id="who" hidden>
+      <span id="who-name"></span>
+      <button class="link" id="reset-bank" type="button" title="New balances and activity; conversations cleared" hidden><span class="long">Start over</span><span class="short">Reset</span></button>
+      <button class="link" id="switch-customer" type="button" hidden><span class="long">Switch customer</span><span class="short">Switch</span></button>
+      <button class="link" id="sign-out" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main id="sign-in" class="sign-in" hidden>
+    <h1>Try the banking assistant</h1>
+    <p>Sign in and you get a pretend bank of your own: a current and a savings account with two months of
+      everyday spending. Ask about it, move money, change your address. Nothing is real money.</p>
+    <section class="visitor-form" id="public-signin" hidden>
+      <a class="google-button" id="google-button" href="/api/auth/google" hidden>Continue with Google</a>
+      <p class="or" id="or-divider" hidden><span>or</span></p>
+      <form id="email-form" class="stack" novalidate>
+        <label for="signin-email">Email</label>
+        <input id="signin-email" type="email" autocomplete="email" maxlength="254" required>
+        <button type="submit" id="email-go">Email me a sign-in code</button>
+      </form>
+      <form id="code-form" class="stack" novalidate hidden>
+        <label for="signin-code" id="signin-code-label"></label>
+        <input id="signin-code" class="code-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" required>
+        <div class="row">
+          <button type="submit" id="code-go">Sign in</button>
+          <button type="button" class="text-button" id="code-restart">Use a different email</button>
+        </div>
+      </form>
+      <p class="form-note" id="public-note" aria-live="polite"></p>
+    </section>
+    <form class="visitor-form" id="visitor-form" novalidate hidden>
+      <label for="visitor-email">Email</label>
+      <input id="visitor-email" type="email" autocomplete="email" maxlength="254" required>
+      <label for="visitor-name">First name <span class="optional">(optional)</span></label>
+      <input id="visitor-name" type="text" autocomplete="given-name" maxlength="40">
+      <p class="form-note" id="visitor-note" aria-live="polite"></p>
+      <button type="submit" id="visitor-go">Open my demo bank</button>
+    </form>
+    <p class="note"><span id="visitor-terms"></span> <a href="/privacy.html">Privacy notice</a></p>
+    <section class="owners" id="owners" hidden>
+      <h2>Owner's demo customers</h2>
+      <p>The two customers in the Open Bank Project sandbox.</p>
+      <div class="customers" id="customers"></div>
+    </section>
+  </main>
+
+  <main id="choose" class="sign-in" hidden>
+    <h1 id="choose-title">Welcome back</h1>
+    <p>Choose a demo customer: the two customers in the Open Bank Project sandbox.</p>
+    <div class="customers" id="choose-customers"></div>
+    <p class="form-note" id="choose-note" aria-live="polite"></p>
+  </main>
+
+  <main id="chat" class="chat" hidden>
+    <nav class="convo-panel" id="convo-panel" aria-label="Your conversations">
+      <div class="convo-head">
+        <h2>Your conversations</h2>
+        <button type="button" class="convo-close" id="convo-close" aria-label="Close the list">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <button type="button" class="convo-new" id="convo-new">+ New conversation</button>
+      <ul class="convo-list" id="convos"></ul>
+    </nav>
+    <div class="scrim" id="scrim" hidden></div>
+
+    <section class="conversation" aria-label="Conversation">
+      <p class="notice" id="notice" hidden></p>
+      <div class="log" id="log" aria-live="polite">
+        <div class="empty" id="empty">
+          <h1>How can I help?</h1>
+          <p>Ask about your balances, your spending, moving money between your current and savings accounts, or your address.</p>
+          <div class="suggestions">
+            <button type="button" class="suggestion">What are my balances?</button>
+            <button type="button" class="suggestion">How much did I spend on groceries last month?</button>
+            <button type="button" class="suggestion">Chart my grocery spending by month</button>
+            <button type="button" class="suggestion">Move £20 from current to savings</button>
+          </div>
+        </div>
+      </div>
+      <form class="composer" id="composer" autocomplete="off">
+        <label class="visually-hidden" for="message">Message</label>
+        <textarea id="message" rows="1" maxlength="2000" placeholder="Ask about your accounts"></textarea>
+        <button type="submit" id="send">Send</button>
+      </form>
+    </section>
+
+    <aside class="trace" aria-label="What happened">
+      <details id="trace-toggle" open>
+        <summary>What happened</summary>
+        <p class="trace-intro">Each answer, step by step: which specialist helped, the bank tools it used, any guardrail that stepped in, and what it cost.</p>
+        <ol class="trace-list" id="trace"></ol>
+      </details>
+    </aside>
+  </main>
+
+  <template id="slip-template">
+    <div class="slip-wrap"><div class="slip" role="group">
+      <h2 class="slip-title"></h2>
+      <dl class="slip-rows"></dl>
+      <div class="slip-stub">
+        <form class="slip-code" hidden>
+          <label class="code-label"></label>
+          <input class="code-input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" required>
+          <p class="code-note" aria-live="polite"></p>
+        </form>
+        <div class="slip-actions">
+          <button type="button" class="approve"></button>
+          <button type="button" class="decline">Decline</button>
+        </div>
+      </div>
+    </div></div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+# vLLM production-stack (chart vllm/vllm-stack 0.1.13): the vLLM pods and the session router.
+#
+#   helm repo add vllm https://vllm-project.github.io/production-stack
+#   helm upgrade --install vllm vllm/vllm-stack --version 0.1.13 -n llm --create-namespace \
+#     -f deploy/k8s/helm/vllm-stack.values.yaml
+#
+# Names this creates (other files rely on them):
+#   Deployment vllm-gptoss-deployment-vllm   (KEDA scales it: deploy/k8s/llm/autoscaling.yaml)
+#   Service    vllm-router-service:80        (the app's VLLM_BASE_URL)
+#
+# To serve another model: change modelURL and --tool-call-parser together (vLLM's "Tool Calling"
+# page lists the parser for each model), and MODEL=vllm:<modelURL> in deploy/k8s/bank/api.yaml.
+
+servingEngineSpec:
+  runtimeClassName: ""                 # EKS Auto Mode's GPU nodes need no special runtime class
+  labels:
+    app: bank-llm-engine               # how the router finds the vLLM pods
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  imagePullPolicy: IfNotPresent        # the image is large; pull it once per node
+  startupProbe:                        # first start downloads ~13 GB and compiles: allow 20 minutes
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 120
+    httpGet: {path: /health, port: 8000}
+  serviceMonitor:
+    enabled: true                      # the chart's own; llm/servicemonitor.yaml is the one that works
+    interval: 15s
+  modelSpec:
+    - name: gptoss
+      repository: vllm/vllm-openai
+      tag: v0.32.0                     # pin one release
+      modelURL: openai/gpt-oss-20b     # served under this name; the app sends model=openai/gpt-oss-20b
+      replicaCount: 1                  # KEDA takes over from here
+      requestCPU: 3
+      requestMemory: 10Gi
+      requestGPU: 1
+      resources:                       # wins over the three lines above; adds room on the node's disk
+        requests: {cpu: "3", memory: 10Gi, nvidia.com/gpu: "1", ephemeral-storage: 40Gi}
+        limits: {memory: 14Gi, nvidia.com/gpu: "1"}   # g5.xlarge has 16 GiB; the weights go to the GPU
+      # No pvcStorage: the model downloads to /tmp (HF_HOME), a scratch disk per pod, so 2-3 replicas
+      # can run on separate nodes (an EBS volume attaches to one node at a time).
+      extraVolumes:
+        - name: model-cache
+          emptyDir: {sizeLimit: 60Gi}
+      extraVolumeMounts:
+        - name: model-cache
+          mountPath: /tmp
+      shmSize: 2Gi                     # counts against the node's 16 GiB; one GPU needs little
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: node.kubernetes.io/instance-type
+              operator: In
+              values: ["g5.xlarge"]
+      vllmConfig:
+        enablePrefixCaching: true      # the default in current vLLM; explicit, so E2 can flip it
+        enableChunkedPrefill: true
+        maxModelLen: 16384
+        gpuMemoryUtilization: 0.90
+        maxNumSeqs: 128
+        tensorParallelSize: 1          # one GPU per pod (this also gives the pod a proper /dev/shm)
+        extraArgs:
+          
+          - --max-num-batched-tokens=8192
+          - --enable-prompt-tokens-details   # responses report the prompt tokens served from the cache
+          - --enable-auto-tool-choice
+          - --tool-call-parser=openai        # the parser for gpt-oss
+      # hf_token:                      # only for gated models: kubectl create secret generic hf-token ...
+      #   secretName: hf-token
+      #   secretKey: token
+
+routerSpec:
+  repository: lmcache/lmstack-router
+  tag: latest                          # pin to a released tag once you've tested one
+  imagePullPolicy: IfNotPresent
+  replicaCount: 1
+  routingLogic: session                # every call with the same x-session-id reaches the same pod,
+  sessionKey: x-session-id             # so that pod's prefix cache already holds the conversation
+  resources:
+    requests: {cpu: 400m, memory: 1000Mi}
+    limits: {memory: 1000Mi}
+
+grafanaDashboards:
+  enabled: true                        # the stack's dashboard: TTFT, latency, queue, KV use, cache hits

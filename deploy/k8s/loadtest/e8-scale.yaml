@@ -1,0 +1,34 @@
+# E8 on the cluster: steady load through the router, enough to make KEDA add a second GPU pod.
+# 32 requests at once is 4x the per-pod threshold of 8 (llm/autoscaling.yaml); 4,000 requests keep
+# it going for about 15 minutes on one A10G, less once the second pod is up.
+#   kubectl apply -f deploy/k8s/loadtest/e8-scale.yaml
+#   kubectl -n loadtest logs -f job/e8-scale
+#   kubectl -n loadtest delete job e8-scale           (before running it again)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e8-scale
+  namespace: loadtest
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: vllm/vllm-openai:v0.32.0          # has `vllm bench serve`; runs on a CPU node
+          command: ["bash", "-c"]
+          args:
+            - |
+              echo "== e8: 32 at once, 4000 requests, started $(date -u +%H:%M:%S) UTC"
+              vllm bench serve --backend openai-chat --endpoint /v1/chat/completions \
+                --base-url http://vllm-router-service.llm.svc.cluster.local --model openai/gpt-oss-20b \
+                --dataset-name random --random-prefix-len 2500 --random-input-len 500 --random-output-len 200 \
+                --ignore-eos --num-prompts 4000 --max-concurrency 32 \
+                --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99 \
+                --goodput ttft:1000 tpot:50
+              echo "== e8: finished $(date -u +%H:%M:%S) UTC"
+          resources:
+            requests: {cpu: "2", memory: 4Gi}
+            limits: {memory: 8Gi}

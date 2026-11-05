@@ -1,0 +1,38 @@
+# E7 on the cluster: simulated customers through the web app, from inside the cluster.
+# First (once):  kubectl -n loadtest create configmap locustfile --from-file=bench/locustfile.py
+# The app needs its test-only settings while this runs (deploy/k8s/README.md, step E7).
+#   kubectl apply -f deploy/k8s/loadtest/e7-locust.yaml
+#   kubectl -n loadtest logs -f job/e7-locust
+#   kubectl -n loadtest delete job e7-locust          (before running it again, e.g. with more USERS)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: e7-locust
+  namespace: loadtest
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: locust
+          image: locustio/locust:2.47.0
+          env:
+            - {name: USERS, value: "50"}
+            - {name: RUN_TIME, value: 15m}
+          command: ["sh", "-c"]
+          args:
+            - |
+              locust -f /mnt/locust/locustfile.py --host http://api.bank.svc.cluster.local:8000 \
+                --headless --users "$USERS" --spawn-rate 1 --run-time "$RUN_TIME" \
+                --only-summary --csv /tmp/e7
+              echo "== stats (CSV)"; cat /tmp/e7_stats.csv
+              echo "== failures (CSV)"; cat /tmp/e7_failures.csv
+          volumeMounts:
+            - {name: locustfile, mountPath: /mnt/locust}
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+      volumes:
+        - name: locustfile
+          configMap: {name: locustfile}

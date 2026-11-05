@@ -1,0 +1,52 @@
+# The bank servers (MCP: accounts, transactions, service, charts) and the security-code service.
+# Same image and command as "docker compose" uses; only the agents' web app calls them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp
+spec:
+  selector: {app: mcp}
+  ports:
+    - {name: accounts, port: 8101, targetPort: 8101}
+    - {name: transactions, port: 8102, targetPort: 8102}
+    - {name: service, port: 8103, targetPort: 8103}
+    - {name: verify, port: 8104, targetPort: 8104}
+    - {name: charts, port: 8105, targetPort: 8105}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp}
+  template:
+    metadata:
+      labels: {app: mcp}
+    spec:
+      containers:
+        - name: mcp
+          image: bank-app                 # set in kustomization.yaml (your ECR image)
+          command: ["python", "-m", "mcp_servers.run"]
+          envFrom:
+            - secretRef: {name: bank-env}  # your .env, minus what the cluster sets (env_to_secret.py)
+          env:                             # these win over anything in bank-env
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: postgres, key: password}}
+            - {name: DATABASE_URL, value: "postgresql://bank:$(POSTGRES_PASSWORD)@postgres:5432/bank"}
+            - {name: MCP_HOST, value: "0.0.0.0"}
+            - {name: MCP_ALLOWED_HOSTS, value: mcp}
+            - {name: MCP_PORT_OFFSET, value: "0"}
+          ports:
+            - containerPort: 8101
+            - containerPort: 8102
+            - containerPort: 8103
+            - containerPort: 8104
+            - containerPort: 8105
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8104}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 250m, memory: 512Mi}
+            limits: {memory: 1Gi}

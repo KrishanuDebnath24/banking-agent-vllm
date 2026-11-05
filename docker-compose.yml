@@ -1,0 +1,81 @@
+# The AWS setup in miniature, on your PC: Postgres + the bank servers + the web chat.
+#
+#   docker compose up --build        start everything, then open http://127.0.0.1:8000
+#   docker compose logs -f mcp       the bank servers' window (security codes appear here with EMAIL_BACKEND=console)
+#   docker compose down              stop (conversations stay in the database)
+#   docker compose down -v           stop and delete the database
+#   docker compose up -d db          just Postgres, for running python -m api / tests against it
+#
+# Settings come from your .env. The lines under "environment" win over .env, because inside
+# Docker the services find each other by name (db, mcp) rather than at 127.0.0.1.
+
+name: banking-agent
+
+x-app: &app
+  build: .
+  image: banking-agent:local
+  env_file: .env
+
+x-database-url: &database-url postgresql://bank:${POSTGRES_PASSWORD:-bank-local-only}@db:5432/bank
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: bank
+      POSTGRES_USER: bank
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bank-local-only}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"   # only your PC can reach it
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank -d bank"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mcp:
+    <<: *app
+    command: ["python", "-m", "mcp_servers.run"]
+    environment:
+      DATABASE_URL: *database-url
+      MCP_HOST: 0.0.0.0          # reachable from the api container (not from your PC)
+      MCP_ALLOWED_HOSTS: mcp     # accept requests addressed to "mcp" (the name the api container uses)
+      MCP_PORT_OFFSET: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8104/healthz', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  api:
+    <<: *app
+    environment:
+      DATABASE_URL: *database-url
+      MCP_ACCOUNTS_URL: http://mcp:8101/mcp
+      MCP_TRANSACTIONS_URL: http://mcp:8102/mcp
+      MCP_SERVICE_URL: http://mcp:8103/mcp
+      MCP_CHARTS_URL: http://mcp:8105/mcp
+      VERIFY_URL: http://mcp:8104
+      API_HOST: 0.0.0.0
+      PORT: "8000"
+      COOKIE_SECURE: "0"         # plain http on your PC; AWS serves https
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+volumes:
+  pgdata:

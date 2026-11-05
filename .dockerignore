@@ -1,0 +1,25 @@
+# What stays out of the Docker image: secrets, local records, tooling.
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+.git/
+.github/
+**/__pycache__/
+**/*.pyc
+*.db
+*.db-*
+*.jsonl
+!seed_log.jsonl
+evals/results/
+tests/
+.pytest_cache/
+.vscode/
+.idea/
+cdk.out/
+**/cdk.out/
+infra/
+Dockerfile
+docker-compose.yml
+.dockerignore
